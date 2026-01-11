@@ -1,0 +1,134 @@
+﻿using System.Collections.Generic;
+using UnityEngine;
+
+[RequireComponent(typeof(LineRenderer))]
+public class RopeVerletVisual : MonoBehaviour
+{
+    [System.Serializable]
+    public struct Node
+    {
+        public Vector2 position;
+        public Vector2 oldPosition;
+        public bool isPinned;
+
+        public Node(Vector2 pos, bool pinned = false)
+        {
+            position = pos;
+            oldPosition = pos;
+            isPinned = pinned;
+        }
+    }
+
+    public Transform startPoint;
+    public Transform endPoint;
+    public float gravity = 9.81f;
+    public int constraintIterations = 6;
+    [Range(0.9f, 0.999f)] public float damping = 0.995f;
+
+    [Header("Rope Settings")]
+    public float segmentLength = 0.2f;
+    public float slackFactor = 0.76f;
+
+    [Header("Pin Settings (for testing)")]
+    public bool pinStart = true;
+    public bool pinEnd = true;
+
+    private int nodeCount;
+    private Node[] nodes;
+    private LineRenderer line;
+
+    [SerializeField, Range(0f, 1f)]
+    private float sagAmount = 0.5f;
+
+    void Start()
+    {
+        line = GetComponent<LineRenderer>();
+        GenerateRope(startPoint, endPoint, slackFactor);
+    }
+
+    public void GenerateRope(Transform a, Transform b, float slackFactor = 1.05f)
+    {
+        if (a == null || b == null)
+        {
+            Debug.LogWarning("Missing rope endpoints.");
+            return;
+        }
+
+        float straightDist = Vector2.Distance(a.position, b.position);
+        float ropeLength = straightDist * slackFactor;
+        nodeCount = Mathf.Max(2, Mathf.RoundToInt(ropeLength / segmentLength) + 1);
+
+        nodes = new Node[nodeCount];
+        line.positionCount = nodeCount;
+
+        for (int i = 0; i < nodeCount; i++)
+        {
+            float t = i / (float)(nodeCount - 1);
+            Vector2 p = Vector2.Lerp(a.position, b.position, t);
+            float sag = Mathf.Sin(t * Mathf.PI) * straightDist * (slackFactor - 1f) * sagAmount;
+            p.y -= sag;
+            bool pinned = (i == 0 || i == nodeCount - 1);
+            nodes[i] = new Node(p, pinned);
+        }
+    }
+
+    void FixedUpdate()
+    {
+        if (nodes == null) return;
+        float dt = Time.fixedDeltaTime;
+
+        // Gán lại trạng thái pin từ Inspector
+        nodes[0].isPinned = pinStart;
+        nodes[nodeCount - 1].isPinned = pinEnd;
+
+        // Verlet integration
+        for (int i = 0; i < nodeCount; i++)
+        {
+            if (nodes[i].isPinned) continue;
+
+            Vector2 velocity = (nodes[i].position - nodes[i].oldPosition) * damping;
+            nodes[i].oldPosition = nodes[i].position;
+            nodes[i].position += velocity + Vector2.down * gravity * dt * dt;
+        }
+
+        // Nếu hai đầu pinned thì gắn theo Transform, nếu không thì để tự do
+        if (startPoint != null && pinStart)
+            nodes[0].position = startPoint.position;
+        if (endPoint != null && pinEnd)
+            nodes[nodeCount - 1].position = endPoint.position;
+
+        // Ràng buộc chiều dài
+        for (int iter = 0; iter < constraintIterations; iter++)
+        {
+            for (int i = 0; i < nodeCount - 1; i++)
+            {
+                Vector2 delta = nodes[i + 1].position - nodes[i].position;
+                float dist = delta.magnitude;
+                float diff = (dist - segmentLength) / dist;
+
+                if (!nodes[i].isPinned)
+                    nodes[i].position += delta * diff * 0.5f;
+                if (!nodes[i + 1].isPinned)
+                    nodes[i + 1].position -= delta * diff * 0.5f;
+            }
+
+            // Cập nhật lại vị trí 2 đầu nếu pinned
+            if (startPoint != null && pinStart)
+                nodes[0].position = startPoint.position;
+            if (endPoint != null && pinEnd)
+                nodes[nodeCount - 1].position = endPoint.position;
+        }
+
+        // Cập nhật LineRenderer
+        for (int i = 0; i < nodeCount; i++)
+            line.SetPosition(i, nodes[i].position);
+    }
+
+    public void InitializeFromNodes(List<Node> nodes, LineRenderer line)
+    {
+        this.nodes = nodes.ToArray();
+        if (line == null)
+            line = GetComponent<LineRenderer>();
+        line.positionCount = this.nodes.Length;
+    }
+}

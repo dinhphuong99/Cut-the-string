@@ -1,0 +1,120 @@
+using System;
+using UnityEngine;
+
+[DisallowMultipleComponent]
+public class PendulumModule : MonoBehaviour, IRopeModule
+{
+    private IPendulumData data;
+    private bool initialized;
+    private bool canSimuation = false;
+
+    private void Awake()
+    {
+        if (data != null)
+        {
+            if (data.Bob == null)
+                return;
+            data.Bob.gravityScale = 0f;
+            data.Bob.linearDamping = 0f;
+            data.Bob.angularDamping = 0f;
+        }
+    }
+
+    private void FixedUpdate()
+    {
+        if (!initialized) return;
+        if (data == null || !data.IsReady) return;
+        if (!canSimuation) return;
+        if (data.PendulumPhysics == null || data.Anchor == null || data.Bob == null) return;
+
+        //float dt = Time.fixedDeltaTime;
+        int steps = Mathf.Max(1, data.PendulumPhysics.substeps);
+        //float stepDt = dt / steps;
+
+        for (int i = 0; i < steps; i++)
+        {
+            SimulateStep();
+        }
+
+        Damping();
+    }
+
+    public void Initialize(IRopeDataProvider rp)
+    {
+        if (initialized) return;
+        if (rp == null)
+        {
+            Debug.LogError("IRopeDataProvider is null"); return;
+        }
+        data = rp as IPendulumData;
+        if (data == null)
+        {
+            Debug.LogError("IPendulumData not implemented by rope"); return;
+        }
+        if (data.Bob == null)
+        {
+            canSimuation = false;
+            return;
+        }
+        if (data.Anchor == null)
+        {
+            canSimuation = false;
+            return;
+        }
+        if (data.IdealLength <= 0f)
+        {
+            canSimuation = false;
+            return;
+        }
+
+        canSimuation = true;
+        initialized = true;
+    }
+
+    private void SimulateStep()
+    {
+        Vector2 bobPos = data.Bob.position;
+        Vector2 anchorPos = data.Anchor.position;
+
+        Vector2 dir = bobPos - anchorPos;
+        float dist = dir.magnitude;
+        if (dist < 0.0001f) return;
+        dir /= dist;
+
+        // Độ dãn x
+        float x = dist - data.IdealLength;
+
+        // Giới hạn độ dãn để chống explosion
+        float maxStretch = data.IdealLength * data.PendulumPhysics.maxStretchFactor;
+        if (dist > maxStretch)
+        {
+            dist = maxStretch;
+            x = dist - data.IdealLength;
+        }
+
+        // Lò xo: kéo hoặc có nén tùy profile
+        bool canPush = data.PendulumPhysics.bidirectionalElasticity || x > 0f;
+        Vector2 springForce = canPush ? (-data.PendulumPhysics.k * x * dir* 3f) : Vector2.zero;
+
+        // Gravity từ profile
+        Vector2 gravityForce = new Vector2(0, -data.PendulumPhysics.gravity) * data.Bob.mass;
+
+        // Damping multiplicative
+        //data.Bob.linearVelocity *= data.PendulumPhysics.damping;
+
+        // Tổng lực
+        Vector2 totalForce = springForce + gravityForce;
+
+        data.Bob.AddForce(totalForce, ForceMode2D.Force);
+
+        // Clamp vận tốc để ổn định
+        float vMag = data.Bob.linearVelocity.magnitude;
+        if (vMag > data.PendulumPhysics.maxVelocity)
+            data.Bob.linearVelocity = data.Bob.linearVelocity.normalized * data.PendulumPhysics.maxVelocity;
+    }
+
+    private void Damping()
+    {
+        data.Bob.linearVelocity *= data.PendulumPhysics.damping;
+    }
+}

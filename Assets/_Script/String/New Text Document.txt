@@ -1,0 +1,77 @@
+using UnityEngine;
+
+public class MoveOfPoint : MonoBehaviour
+{
+    [Header("Targets")]
+    public Transform head;
+    public Transform tail;
+
+    [Header("Physics Settings")]
+    public float spring = 10f;            // Độ cứng dây (Hooke constant)
+    public float equilibriumDistance = 0.3f; // Chiều dài lý tưởng
+    public float gravity = 1f;            // Trọng lực
+    public float damping = 2f;            // Hệ số giảm chấn (0.1–5)
+    public float maxDistance = 1f;        // Giới hạn an toàn (phòng lỗi mô phỏng)
+
+    private Vector3 velocity;
+
+    void Update()
+    {
+        Vector3 totalForce = Vector3.down * gravity;
+
+        // --- Lực từ head ---
+        if (head)
+            totalForce += ComputeSpringForce(head);
+
+        // --- Lực từ tail ---
+        if (tail)
+            totalForce += ComputeSpringForce(tail);
+
+        // --- Cập nhật vật lý ---
+        velocity += totalForce * Time.deltaTime;
+        velocity *= (1f - damping * Time.deltaTime); // damping tuyến tính
+        transform.position += velocity * Time.deltaTime;
+
+        // --- Clamp vị trí ---
+        if (head)
+        {
+            float dist = Vector3.Distance(transform.position, head.position);
+            if (dist > maxDistance)
+                transform.position = head.position + (transform.position - head.position).normalized * maxDistance;
+        }
+        if (tail)
+        {
+            float dist = Vector3.Distance(transform.position, tail.position);
+            if (dist > maxDistance)
+                transform.position = tail.position + (transform.position - tail.position).normalized * maxDistance;
+        }
+    }
+
+    private Vector3 ComputeSpringForce(Transform target)
+    {
+        Vector3 dir = target.position - transform.position;
+        float dist = dir.magnitude;
+
+        if (dist <= 0.0001f) return Vector3.zero;
+
+        float stretch = dist - equilibriumDistance; // Độ giãn (có thể âm nếu nén)
+        Vector3 force = dir.normalized * (spring * stretch);
+        return force;
+    }
+
+    private void OnDrawGizmos()
+    {
+        Gizmos.color = Color.cyan;
+        Gizmos.DrawWireSphere(transform.position, 0.05f);
+        if (head)
+        {
+            Gizmos.color = Color.green;
+            Gizmos.DrawLine(transform.position, head.position);
+        }
+        if (tail)
+        {
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawLine(transform.position, tail.position);
+        }
+    }
+}

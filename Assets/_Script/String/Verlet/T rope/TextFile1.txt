@@ -1,0 +1,766 @@
+﻿//using UnityEngine;
+//using System.Collections.Generic;
+
+//using System;
+
+///// <summary>
+
+///// Node dữ liệu cho từng điểm của dây.
+
+///// Mỗi node tự lưu vị trí hiện tại, vị trí cũ, và cờ isPinned (cố định hay không).
+
+///// </summary>
+
+//[System.Serializable]
+
+//public struct RopeNode4
+
+//{
+
+//    public Vector2 position;
+
+//    public Vector2 oldPosition;
+
+//    public bool isPinned;
+
+//    public RopeNode4(Vector2 pos, bool pinned = false)
+
+//    {
+
+//        position = pos;
+
+//        oldPosition = pos;
+
+//        isPinned = pinned;
+
+//    }
+
+//    public Vector2 Velocity => position - oldPosition;
+
+//}
+
+//public class VerletRope7 : MonoBehaviour, IRopeDataProvider, ICuttableRope, IRopeSimulationData, IRopeRetractRelease
+//{
+
+//    [Header("Profile (Optional)")]
+
+//    public RopeProfile profile;
+
+//    [Header("Rope Parameters")]
+
+//    public int nodeCount = 20;
+
+//    [HideInInspector] public float segmentLength = 0.2f;
+
+//    [HideInInspector] public float gravity = 9.81f;
+
+//    [HideInInspector, Range(0.8f, 0.9999f)] public float damping = 0.995f;
+
+//    [HideInInspector] public int constraintIterations = 6;
+
+//    [HideInInspector] public float slack = 1.1f;
+
+//    [HideInInspector] public float recoilStrength = 1.5f;
+
+//    public float weakRatio = 0.45f;
+
+//    [Header("Simulation")]
+
+//    public bool simulate = true;
+
+//    public bool isStartDetached = false;
+
+//    public bool isEndDetached = false;
+
+//    [Header("Visual")]
+
+//    public Transform startPoint;
+
+//    public Transform endPoint;
+
+//    //[SerializeField] private bool isBlinking = false;
+
+//    public bool shouldBlink = false;
+
+//    public List<RopeNode4> nodes = new();
+
+//    public List<int> freeNodes = new List<int>();
+
+//    private readonly List<Vector2> nodePositions = new();
+
+//    private RopeRender ropeRenderInstance;
+
+//    public bool IsReady { get; private set; }
+
+//    int IRopeDataProvider.NodeCount => nodes?.Count ?? 0;
+
+//    IReadOnlyList<Vector2> IRopeDataProvider.Nodes => nodePositions;
+
+//    private void UpdateNodePositionsCache()
+//    {
+//        nodePositions.Clear();
+//        for (int i = 0; i < nodes.Count; i++)
+//            nodePositions.Add(nodes[i].position);
+//    }
+
+//    bool IRopeDataProvider.ShouldBlink => shouldBlink;
+
+//    event Action IRopeDataProvider.OnNodesReady
+//    {
+//        add => _onNodesReady += value;
+//        remove => _onNodesReady -= value;
+//    }
+
+//    private void NotifyNodesReady()
+//    {
+//        _onNodesReady?.Invoke();
+//    }
+
+//    private void Awake()
+//    {
+
+//        IsReady = false;
+
+//        if (profile == null || profile.physics == null || profile.render == null)
+
+//            return;
+
+//        ApplyProfile();
+
+//        SetupRendererFromProfile();
+
+//    }
+
+//    void Start()
+
+//    {
+
+//        if (profile.physics
+
+//        != null)
+
+//            ApplyProfile();
+
+//        // Nếu rope đã có node (spawn runtime) => không cần InitializeRope
+
+//        if (nodes != null && nodes.Count > 0)
+
+//        {
+
+//            nodeCount = nodes.Count;
+
+//            simulate = true;
+//        }
+
+//        else if (startPoint && endPoint)
+//        {
+//            InitializeRope_CompressStretch(startPoint.position, endPoint.position);
+//        }
+//        else
+//        {
+//            Debug.LogWarning($"[{name}] Rope missing startPoint or endPoint reference!");
+//        }
+//    }
+
+//    private void MarkReady()
+//    {
+//        if (IsReady)
+//            return;
+
+//        UpdateNodePositionsCache();
+//        IsReady = true;
+//        _onNodesReady?.Invoke();
+//    }
+
+//    public void InitializeRuntime(
+//    RopeProfile sourceProfile,
+//    List<RopeNode4> runtimeNodes,
+//    Transform start,
+//    Transform end)
+//    {
+//        profile = sourceProfile;
+//        ApplyProfile();
+
+//        nodes = new List<RopeNode4>(runtimeNodes);
+//        startPoint = start;
+//        endPoint = end;
+
+//        SetupRendererFromProfile();
+//        simulate = true;
+
+//        MarkReady();
+//    }
+
+//    private void SetupRendererFromProfile()
+//    {
+//        if (profile.physics == null)
+//        {
+//            Debug.LogError($"[{name}] Missing RopePhysicsProfile", this);
+//            enabled = false;
+//            return;
+//        }
+
+//        if (profile.render == null)
+//        {
+//            Debug.LogError($"[{name}] RopeProfile missing render prefab", this);
+//            enabled = false;
+
+//            return;
+//        }
+
+//        GameObject go = Instantiate(profile.render.renderPrefab, transform);
+
+//        if (!go.TryGetComponent(out ropeRenderInstance))
+//        {
+//            Debug.LogError($"[{name}] Render prefab does not contain RopeRender", go);
+//            Destroy(go);
+//            enabled = false;
+
+//            return;
+//        }
+
+//        ropeRenderInstance.Bind(this);
+//    }
+
+//#if UNITY_EDITOR
+
+//    void OnValidate()
+
+//    {
+
+//        if (profile == null || profile.physics == null)
+
+//            return;
+
+//        ApplyProfile();
+
+//    }
+
+//#endif
+
+//    public void ApplyProfile()
+
+//    {
+
+//        gravity = profile.physics.gravity;
+
+//        damping = profile.physics.damping;
+
+//        segmentLength = profile.physics.segmentLength;
+
+//        constraintIterations = profile.physics.constraintIterations;
+
+//        slack = profile.physics.slackFactor;
+
+//    }
+
+//    // -------------------------------------------------------------------------
+
+//    // Initialization
+
+//    // -------------------------------------------------------------------------
+
+//    public void InitializeRope(Vector2 start, Vector2 end, float slackFactor = 1f)
+
+//    {
+
+//        nodes.Clear();
+
+//        float ropeLength = Vector2.Distance(start, end) * slackFactor;
+
+//        nodeCount = Mathf.Max(2, (int)(ropeLength / segmentLength + 1));
+
+//        Vector2 dir = (end - start).normalized;
+
+//        for (int i = 0; i < nodeCount; i++)
+
+//        {
+
+//            Vector2 pos = start + dir * segmentLength * i;
+
+//            nodes.Add(new RopeNode4(pos));
+
+//        }
+
+//        var n = nodes[0];
+
+//        if (startPoint && !isStartDetached)
+
+//        {
+
+//            n.position = startPoint.position;
+
+//            n.oldPosition = startPoint.position;
+
+//            n.isPinned = true;
+
+//            nodes[0] = n;
+
+//        }
+
+//        else
+
+//        {
+
+//            n.isPinned = false;
+
+//            nodes[0] = n;
+
+//        }
+
+//        var nE = nodes[nodeCount - 1];
+
+//        if (endPoint && !isEndDetached)
+
+//        {
+
+//            nE.position = endPoint.position;
+
+//            nE.oldPosition = endPoint.position;
+
+//            nE.isPinned = true;
+
+//            nodes[nodeCount - 1] = nE;
+
+//        }
+
+//        else
+
+//        {
+
+//            nE.isPinned = false;
+
+//            nodes[0] = nE;
+
+//        }
+
+//        MarkReady();
+//    }
+
+//    // -------------------------------------------------------------------------
+
+//    // Simulation
+
+//    // -------------------------------------------------------------------------
+
+//    void FixedUpdate()
+//    {
+//        SyncAnchors();
+//        UpdateNodePositionsCache();
+//    }
+
+//    //void SimulateVerlet(float dt)
+//    //{
+
+//    //    Vector2 gravityVec = new Vector2(0, -gravity);
+
+//    //    for (int i = 0; i < nodeCount; i++)
+
+//    //    {
+
+//    //        if (nodes[i].isPinned) continue;
+
+//    //        RopeNode4 n = nodes[i];
+
+//    //        Vector2 pos = n.position;
+
+//    //        Vector2 old = n.oldPosition;
+
+//    //        Vector2 velocity = (pos - old) * damping;
+
+//    //        n.oldPosition = pos;
+
+//    //        n.position = pos + velocity + gravityVec * dt * dt;
+
+//    //        nodes[i] = n;
+
+//    //    }
+
+//    //    ForceUpdateAnchors();
+
+//    //}
+
+//    //void ApplyConstraints()
+
+//    //{
+
+//    //    for (int iter = 0; iter < constraintIterations; iter++)
+
+//    //    {
+
+//    //        for (int i = 0; i < nodeCount - 1; i++)
+
+//    //        {
+
+//    //            RopeNode4 n1 = nodes[i];
+
+//    //            RopeNode4 n2 = nodes[i + 1];
+
+
+
+//    //            Vector2 delta = n2.position - n1.position;
+
+//    //            float dist = delta.magnitude;
+
+//    //            if (dist == 0f) continue;
+
+
+
+//    //            float diff = (dist - segmentLength) / dist;
+
+//    //            Vector2 correction = delta * diff * 0.5f;
+
+
+
+//    //            if (!n1.isPinned) n1.position += correction;
+
+//    //            if (!n2.isPinned) n2.position -= correction;
+
+
+
+//    //            nodes[i] = n1;
+
+//    //            nodes[i + 1] = n2;
+
+//    //        }
+
+//    //    }
+
+//    //    ForceUpdateAnchors();
+
+//    //}
+
+//    //void ForceUpdateAnchors()
+
+//    //{
+
+//    //    if (startPoint)
+
+//    //        nodes[0] = new RopeNode4(startPoint.position, true);
+
+//    //    if (endPoint)
+
+//    //        nodes[nodeCount - 1] = new RopeNode4(endPoint.position, true);
+
+//    //}
+
+//    // -------------------------------------------------------------------------
+
+//    // Cutting System
+
+//    // -------------------------------------------------------------------------
+
+//    public void CutAtIndex(int index)
+
+//    {
+
+//        if (index <= 0 || index >= nodeCount - 1)
+
+//            return;
+
+//        // 1. Tách danh sách node
+
+//        List<RopeNode4> left = new List<RopeNode4>(nodes.GetRange(0, index + 1));
+
+//        List<RopeNode4> right = new List<RopeNode4>(nodes.GetRange(index, nodeCount - index));
+
+//        // 2. Đồng bộ vị trí cắt
+
+//        Vector2 cutPos = nodes[index].position;
+
+//        var lastLeft = left[left.Count - 1];
+
+//        lastLeft.position = cutPos;
+
+//        left[left.Count - 1] = lastLeft;
+
+//        var firstRight = right[0];
+
+//        firstRight.position = cutPos;
+
+//        right[0] = firstRight;
+
+//        // 3. Recoil
+
+//        Vector2 dir = (nodes[Mathf.Min(index + 1, nodeCount - 1)].position -
+
+//        nodes[Mathf.Max(index - 1, 0)].position).normalized;
+
+//        ApplyRecoil(left, -dir * recoilStrength);
+
+//        ApplyRecoil(right, dir * recoilStrength);
+
+//        // 4. Tạo 2 dây mới
+
+//        SpawnRopePiece(left, "LeftPiece", startPoint);
+
+//        SpawnRopePiece(right, "RightPiece", null, endPoint);
+
+//        // 5. Xóa dây gốc
+
+//        Destroy(gameObject);
+
+//    }
+
+//    int ICuttableRope.RecommendedCutIndex
+//    {
+//        get
+//        {
+//            var free = new List<int>();
+
+//            for (int i = 1; i < nodes.Count - 1; i++)
+//                if (!nodes[i].isPinned)
+//                    free.Add(i);
+
+//            if (free.Count == 0)
+//                return -1;
+
+//            return free[
+//                Mathf.Clamp(
+//                    Mathf.RoundToInt(free.Count * weakRatio),
+//                    0,
+//                    free.Count - 1
+//                )
+//            ];
+//        }
+//    }
+
+//    bool ICuttableRope.CanBeCut =>
+//    nodes != null &&
+//    nodes.Count >= 3 &&
+//    nodes[0].isPinned &&
+//    nodes[^1].isPinned;
+
+//    float ICuttableRope.GetStretch
+//    {
+//        get
+//        {
+//            float max = GetCurrentMaxLength();
+//            if (max <= Mathf.Epsilon) return 0f;
+//            return GetCurrentRopeLength() / max;
+//        }
+//    }
+
+//    IList<RopeNode4> IRopeSimulationData.Nodes => nodes;
+//    float IRopeSimulationData.Gravity => gravity;
+//    float IRopeSimulationData.Damping => damping;
+//    float IRopeSimulationData.SegmentLength => segmentLength;
+//    int IRopeSimulationData.ConstraintIterations => constraintIterations;
+//    bool IRopeSimulationData.Simulate => simulate;
+
+//    IList<RopeNode4> IRopeRetractRelease.Nodes => nodes;
+
+//    float IRopeRetractRelease.SegmentLength => segmentLength;
+
+//    bool IRopeRetractRelease.IsReady => this.IsReady;
+
+//    bool ICuttableRope.CutAt(int index)
+//    {
+//        if (index <= 0 || index >= nodes.Count - 1)
+//            return false;
+
+//        CutAtIndex(index);
+//        return true;
+//    }
+
+
+//    void ApplyRecoil(List<RopeNode4> list, Vector2 recoil)
+
+//    {
+
+//        for (int i = 0; i < list.Count; i++)
+
+//        {
+
+//            float falloff = (float)i / list.Count;
+
+//            RopeNode4 n = list[i];
+
+//            n.position += recoil * (1f - falloff) * 0.1f;
+
+//            list[i] = n;
+
+//        }
+
+//    }
+
+//    // -------------------------------------------------------------------------
+
+//    // Debug / Utility
+
+//    // -------------------------------------------------------------------------
+
+//    void Update()
+//    {
+//        shouldBlink = GetCurrentRopeLength() >= GetCurrentMaxLength() / 1.25f;
+
+//    }
+
+//    public void InitializeRope_CompressStretch(Vector3 start, Vector3 end, int fixedNodeCount = 35)
+
+//    {
+
+//        nodes.Clear();
+
+//        nodeCount = Mathf.Max(2, fixedNodeCount);
+
+//        float idealTotalLength = segmentLength * (nodeCount - 1);   // độ dài lý tưởng
+
+//        float actualDist = Vector2.Distance(start, end);            // khoảng cách thực tế
+
+//        float scale = actualDist / idealTotalLength;                // hệ số nén/giãn
+
+//        Vector3 dir = (end - start).normalized;
+
+//        for (int i = 0; i < nodeCount; i++)
+
+//        {
+
+//            // vị trí spawn bị nén/giãn tạm thời
+
+//            float idealOffset = segmentLength * i;
+
+//            Vector3 pos = start + dir * (idealOffset * scale);
+
+//            nodes.Add(new RopeNode4(pos));
+
+//        }
+
+//        // Pin hai đầu nếu có anchor
+
+//        if (startPoint) nodes[0] = new RopeNode4(startPoint.position, true);
+
+//        if (endPoint) nodes[nodeCount - 1] = new RopeNode4(endPoint.position, true);
+
+//        MarkReady();
+
+//    }
+
+//    public float GetCurrentRopeLength()
+
+//    {
+
+//        if (nodes == null || nodes.Count < 2)
+
+//            return 0f;
+
+//        float totalLength = 0f;
+
+//        for (int i = 0; i < nodes.Count - 1; i++)
+
+//        {
+
+//            totalLength += Vector2.Distance(nodes[i].position, nodes[i + 1].position);
+
+//        }
+
+//        return totalLength;
+
+//    }
+
+//    public float GetLengthAtStretch(float stretchPercent)
+
+//    {
+
+//        float ideal = ComputeIdealLength();
+
+//        return ideal * (1f + stretchPercent);
+
+//    }
+
+//    public float GetCurrentMaxLength()
+
+//    {
+
+//        return ComputeIdealLength() * profile.physics.maxStretchFactor;
+
+//    }
+
+//    public float ComputeIdealLength()
+
+//    {
+
+//        float sum = 0f;
+
+//        for (int i = 0; i < nodes.Count - 1; i++)
+
+//        {
+
+//            RopeNode4 a = nodes[i];
+
+//            RopeNode4 b = nodes[i + 1];
+
+//            if (a.isPinned && b.isPinned)
+
+//            {
+
+//                // Nếu cả hai pinned → lấy độ dài thật ở runtime      
+
+//                sum += Vector2.Distance(a.position, b.position);
+//            }
+//            else
+//            {
+//                sum += segmentLength;
+//            }
+
+//        }
+
+//        return sum;
+
+//    }
+
+//    public event Action _onNodesReady;
+
+//    public void FinalizeBuild()
+//    {
+//        MarkReady();
+//        NotifyNodesReady();
+//    }
+
+//    void SpawnRopePiece(
+//    List<RopeNode4> nodeList,
+//    string nameSuffix,
+//    Transform startAnchor = null,
+//    Transform endAnchor = null)
+//    {
+//        RopeFactory.CreateRope(
+//            profile,
+//            nodeList,
+//            startAnchor,
+//            endAnchor,
+//            gameObject // dùng rope cũ làm blueprint
+//        );
+//    }
+
+//    private void SyncAnchors()
+//    {
+//        if (startPoint && !isStartDetached && nodes.Count > 0)
+//        {
+//            var n = nodes[0];
+//            Vector2 pos = startPoint.position;
+
+//            if (n.position != pos)
+//            {
+//                n.position = pos;
+//                n.oldPosition = pos; // reset velocity
+//                n.isPinned = true;
+//                nodes[0] = n;
+//            }
+//        }
+
+//        if (endPoint && !isEndDetached && nodes.Count > 1)
+//        {
+//            int last = nodes.Count - 1;
+//            var n = nodes[last];
+//            Vector2 pos = endPoint.position;
+
+//            if (n.position != pos)
+//            {
+//                n.position = pos;
+//                n.oldPosition = pos;
+//                n.isPinned = true;
+//                nodes[last] = n;
+//            }
+//        }
+//    }
+//}

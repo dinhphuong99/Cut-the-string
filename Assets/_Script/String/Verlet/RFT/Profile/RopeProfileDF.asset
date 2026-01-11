@@ -1,0 +1,16 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 157da1a2992d5e446bf4f0a85d07fc20, type: 3}
+  m_Name: RopeProfileDF
+  m_EditorClassIdentifier: 
+  physics: {fileID: 11400000, guid: 9885a5f755712af4c886fca56399a1a0, type: 2}
+  render: {fileID: 11400000, guid: d856660b891a0ea439990674d0347a9d, type: 2}

@@ -1,0 +1,124 @@
+using UnityEngine;
+using System;
+
+[RequireComponent(typeof(LineRenderer))]
+public class RopeRender : MonoBehaviour
+{
+    [Header("Visual")]
+    [SerializeField, Min(0.001f)]
+    private float ropeWidth = 0.15f;
+
+    [SerializeField]
+    private Material lineMaterial;
+
+    [Header("Blink")]
+    [SerializeField]
+    private bool enableBlink = true;
+
+    [SerializeField]
+    private float blinkSpeed = 3f;
+
+    [SerializeField]
+    private Color blinkColorA = Color.red;
+
+    [SerializeField]
+    private Color blinkColorB = Color.white;
+
+    private IRopeDataProvider rope;
+    private LineRenderer line;
+    private Color baseColor;
+    private bool initialized;
+    private bool lastBlinkState;
+
+    private void Awake()
+    {
+        line = GetComponent<LineRenderer>();
+        ConfigureLineRenderer();
+    }
+
+    public void Bind(IRopeDataProvider ropeProvider)
+    {
+        if (ropeProvider == null)
+            throw new ArgumentNullException(nameof(ropeProvider));
+
+        if (rope != null)
+            rope.OnNodesReady -= Initialize;
+
+        rope = ropeProvider;
+        rope.OnNodesReady += Initialize;
+    }
+
+    private void OnDestroy()
+    {
+        if (rope != null)
+            rope.OnNodesReady -= Initialize;
+    }
+
+    private void Initialize()
+    {
+        if (initialized)
+            return;
+
+        initialized = true;
+        baseColor = line.startColor;
+        UpdatePositions();
+    }
+
+    private void LateUpdate()
+    {
+        if (!initialized || rope == null || rope.NodeCount < 2)
+            return;
+
+        UpdatePositions();
+        UpdateBlink();
+    }
+
+    private void UpdatePositions()
+    {
+        int count = rope.NodeCount;
+        line.positionCount = count;
+
+        var nodes = rope.Nodes;
+        for (int i = 0; i < count; i++)
+            line.SetPosition(i, nodes[i]);
+    }
+
+    private void UpdateBlink()
+    {
+        if (!enableBlink)
+            return;
+
+        if (rope.ShouldBlink != lastBlinkState)
+        {
+            if (!rope.ShouldBlink)
+                SetColor(baseColor);
+
+            lastBlinkState = rope.ShouldBlink;
+        }
+
+        if (!rope.ShouldBlink)
+            return;
+
+        float t = (Mathf.Sin(Time.time * blinkSpeed) + 1f) * 0.5f;
+        SetColor(Color.Lerp(blinkColorA, blinkColorB, t));
+    }
+
+    private void SetColor(Color c)
+    {
+        line.startColor = c;
+        line.endColor = c;
+    }
+
+    private void ConfigureLineRenderer()
+    {
+        line.useWorldSpace = true;
+        line.loop = false;
+        line.widthCurve = AnimationCurve.Constant(0f, 1f, 1f);
+        line.widthMultiplier = ropeWidth;
+        line.alignment = LineAlignment.View;
+        line.textureMode = LineTextureMode.Stretch;
+
+        if (lineMaterial != null)
+            line.sharedMaterial = lineMaterial;
+    }
+}

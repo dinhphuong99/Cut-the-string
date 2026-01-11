@@ -1,0 +1,356 @@
+using UnityEngine;
+using System.Collections.Generic;
+
+[DisallowMultipleComponent]
+public sealed class RopeSimulation : MonoBehaviour, IRopeModule
+{
+    private IRopeSimulationData data;
+    private bool initialized = false;
+    private float currentSegmentLength;
+
+    // --- New fields for accumulator, sleep, adaptive iterations ---
+    [Header("Simulation Settings (tuning)")]
+    [SerializeField, Tooltip("Fixed sub-step used by the accumulator (seconds).")]
+    private float _fixedStep = 1f / 60f;
+
+    [SerializeField, Tooltip("Maximum accumulated dt to avoid spiral of death (seconds).")]
+    private float _maxAccumulatedDt = 0.25f;
+
+    [SerializeField, Tooltip("Max per-step movement multiplier relative to segment length.")]
+    private float _maxMoveMultiplier = 5f;
+
+    [SerializeField, Tooltip("Extra iterations scale for adaptive iteration calculation.")]
+    private float _iterationTensionScale = 20f;
+
+    [SerializeField, Tooltip("Maximum extra iterations to add on top of base ConstraintIterations.")]
+    private int _maxExtraIterations = 16;
+
+    [Header("Sleep Settings")]
+    [SerializeField, Tooltip("Velocity threshold (units/s) below which rope begins sleeping.")]
+    private float _sleepVelocityThreshold = 0.02f;
+
+    [SerializeField, Tooltip("Seconds of low activity required to enter sleep.")]
+    private float _sleepTime = 0.3f;
+
+    [SerializeField, Tooltip("Velocity threshold (units/s) to immediately wake the rope.")]
+    private float _wakeVelocityThreshold = 0.05f;
+
+    private float _accumulator = 0f;
+    private float _sleepTimer = 0f;
+    private bool _isSleeping = false;
+
+    public void Initialize(IRopeDataProvider rp)
+    {
+        if (initialized) return;
+
+        // prefer direct cast to mutation-capable interface  
+        data = rp as IRopeSimulationData;
+        if (data == null)
+        {
+            Debug.LogWarning("[RopeSimulation] IRopeSimulationData not available on provided rope. Disabling simulation.", this);
+            enabled = false;
+            return;
+        }
+
+        initialized = true;
+    }
+
+    private void FixedUpdate()
+    {
+        if (!initialized) return;
+
+        if (!data.Simulate || !data.IsReady)
+            return;
+
+        var nodes = data.Nodes;
+        if (nodes == null || nodes.Count < 2)
+            return;
+
+        // Keep using FixedUpdate to push dt in - SimulateVerlet will sub-step internally via accumulator
+        Tick(Time.fixedDeltaTime);
+    }
+
+    // ------------------------------------------------------------
+    // Public tick – cho test, replay, sub-step
+    // ------------------------------------------------------------
+    public void Tick(float dt)
+    {
+        if (data.IsTaut)
+        {
+            currentSegmentLength = ComputeCurrentSegmentLength();
+        }
+        else
+        {
+            currentSegmentLength = data.SegmentLength;
+        }
+
+        SimulateVerlet(dt);
+        // Use adaptive iterations computed inside SimulateVerlet -> so we call SolveDistanceConstraints inside
+        // (the original SolveDistanceConstraints() is replaced by SolveDistanceConstraintsIterations in this class)
+    }
+
+    // ------------------------------------------------------------
+    // SimulateVerlet: accumulator pattern + adaptive iteration + sleep/wake
+    // ------------------------------------------------------------
+    private void SimulateVerlet(float dt)
+    {
+        // Basic guards
+        if (dt <= 0f || data == null) return;
+
+        // Clamp incoming dt to prevent spiral-of-death; then accumulate
+        float clampedDt = Mathf.Min(dt, _maxAccumulatedDt);
+        _accumulator += clampedDt;
+
+        // If sleeping, check quickly for wake conditions (cheap check)
+        if (_isSleeping)
+        {
+            // Quick wake detection: check any node moved externally more than wake threshold
+            if (CheckWakeCondition(_wakeVelocityThreshold))
+            {
+                _isSleeping = false;
+                _sleepTimer = 0f;
+            }
+            else
+            {
+                // remain sleeping; skip simulation (but keep small accumulator to detect wake next frame)
+                // keep accumulator = 0 to avoid backlog
+                _accumulator = 0f;
+                return;
+            }
+        }
+
+        // While we have enough accumulated time, perform fixed-step sub-steps
+        while (_accumulator >= _fixedStep)
+        {
+            Step(_fixedStep);
+            _accumulator -= _fixedStep;
+        }
+
+        // After sub-steps, update sleep timer
+        UpdateSleepState(_fixedStep);
+    }
+
+    // Single fixed sub-step
+    private void Step(float subDt)
+    {
+        var nodes = data.Nodes;
+        if (nodes == null || nodes.Count < 2) return;
+
+        // -------------------------
+        // Integrate (Verlet) with safe clamps
+        // -------------------------
+        Vector2 gravityAccel = Vector2.down * data.Gravity;
+        float dtSq = subDt * subDt;
+        float damping = Mathf.Clamp01(data.Damping);
+
+        int count = nodes.Count;
+
+        // safe max move based on current segment length
+        float safeBase = Mathf.Max(currentSegmentLength, data.SegmentLength);
+        float maxMovePerStep = Mathf.Max(safeBase * _maxMoveMultiplier, 0.0001f);
+        float maxMovePerStepSq = maxMovePerStep * maxMovePerStep;
+
+        // Integrate each particle
+        for (int i = 0; i < count; i++)
+        {
+            RopeNode4 n = nodes[i];
+
+            if (n.isPinned)
+            {
+                // pinned: ensure oldPosition follows to avoid phantom velocity when unpinned
+                n.oldPosition = n.position;
+                nodes[i] = n;
+                continue;
+            }
+
+            Vector2 prevPos = n.position;
+            Vector2 velocity = prevPos - n.oldPosition;
+
+            // update oldPosition
+            n.oldPosition = prevPos;
+
+            Vector2 nextPos = prevPos + velocity * damping + gravityAccel * dtSq;
+
+            // clamp per-step movement for robustness
+            Vector2 move = nextPos - prevPos;
+            if (move.sqrMagnitude > maxMovePerStepSq)
+            {
+                move = move.normalized * maxMovePerStep;
+            }
+
+            n.position = prevPos + move;
+            nodes[i] = n;
+        }
+
+        // -------------------------
+        // Adaptive constraint iterations based on "tension"
+        // -------------------------
+        int baseIterations = Mathf.Max(1, data.ConstraintIterations);
+        float tension = ComputeTensionEstimate(nodes, currentSegmentLength);
+        int extra = Mathf.Clamp(Mathf.CeilToInt(tension * _iterationTensionScale), 0, _maxExtraIterations);
+        int iterations = Mathf.Clamp(baseIterations + extra, 1, baseIterations + _maxExtraIterations);
+
+        SolveDistanceConstraintsIterations(iterations);
+
+        // Note: we keep velocities implicitly via pos and oldPos as usual Verlet; no separate velocity update needed here.
+    }
+
+    // Compute a cheap tension estimate: max relative error across segments (0..inf). Normalized later.
+    private float ComputeTensionEstimate(IList<RopeNode4> nodes, float restLength)
+    {
+        if (nodes == null) return 0f;
+        int count = nodes.Count;
+        if (count < 2 || restLength <= 0f) return 0f;
+
+        float maxRel = 0f;
+        for (int i = 0; i < count - 1; i++)
+        {
+            Vector2 a = nodes[i].position;
+            Vector2 b = nodes[i + 1].position;
+            float dist = Vector2.Distance(a, b);
+            float rel = Mathf.Abs(dist - restLength) / restLength; // 0 = perfect, >0 = tension/overstretch
+            if (rel > maxRel) maxRel = rel;
+        }
+
+        // maxRel can be 0..large; normalize to [0,1] clamped for iteration scaling
+        // For robustness, a rel of 0.5 means 50% over/under => significant tension
+        return Mathf.Clamp01(maxRel * 1.0f); // simple scaling; iteration scale is handled by _iterationTensionScale
+    }
+
+    // Solve distance constraints with provided iteration count (refactored from your old method)
+    private void SolveDistanceConstraintsIterations(int iterations)
+    {
+        var nodes = data.Nodes;
+        if (nodes == null || nodes.Count < 2) return;
+
+        float restLength = currentSegmentLength;
+
+        for (int iter = 0; iter < iterations; iter++)
+        {
+            // iterate through segment pairs
+            for (int i = 0; i < nodes.Count - 1; i++)
+            {
+                RopeNode4 a = nodes[i];
+                RopeNode4 b = nodes[i + 1];
+
+                Vector2 delta = b.position - a.position;
+                float dist = delta.magnitude;
+                if (dist <= Mathf.Epsilon) continue;
+
+                float error = (dist - restLength) / dist;
+                Vector2 correction = delta * error;
+
+                if (a.isPinned && b.isPinned)
+                {
+                    // both pinned: nothing to do
+                }
+                else if (a.isPinned)
+                {
+                    b.position -= correction;
+                }
+                else if (b.isPinned)
+                {
+                    a.position += correction;
+                }
+                else
+                {
+                    correction *= 0.5f;
+                    a.position += correction;
+                    b.position -= correction;
+                }
+
+                nodes[i] = a;
+                nodes[i + 1] = b;
+            }
+        }
+    }
+
+    // Wake detection: cheap check whether any node moved relative to oldPosition (external change)
+    private bool CheckWakeCondition(float wakeThreshold)
+    {
+        var nodes = data.Nodes;
+        if (nodes == null) return false;
+
+        float wakeSq = wakeThreshold * wakeThreshold;
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            RopeNode4 n = nodes[i];
+            Vector2 diff = n.position - n.oldPosition;
+            if (diff.sqrMagnitude > wakeSq) return true;
+        }
+        return false;
+    }
+
+    // Update sleep timer based on current implicit velocities
+    private void UpdateSleepState(float subDt)
+    {
+        var nodes = data.Nodes;
+        if (nodes == null || nodes.Count == 0) return;
+
+        // compute max per-segment velocity magnitude (approx) as max(|pos - oldPos|) / subDt
+        float maxMoveSq = 0f;
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            RopeNode4 n = nodes[i];
+            Vector2 move = n.position - n.oldPosition;
+            float mSq = move.sqrMagnitude;
+            if (mSq > maxMoveSq) maxMoveSq = mSq;
+        }
+
+        float maxMove = Mathf.Sqrt(maxMoveSq);
+        float maxVel = subDt > 0f ? maxMove / subDt : 0f;
+
+        if (maxVel < _sleepVelocityThreshold)
+        {
+            _sleepTimer += subDt;
+            if (_sleepTimer >= _sleepTime)
+            {
+                _isSleeping = true;
+                // clear accumulator to avoid backlog while sleeping
+                _accumulator = 0f;
+            }
+        }
+        else
+        {
+            _sleepTimer = 0f;
+            _isSleeping = false;
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Distance constraints (original method kept for completeness)
+    // ------------------------------------------------------------
+    // NOTE: the simulation now calls SolveDistanceConstraintsIterations(int)
+    private void SolveDistanceConstraints()
+    {
+        SolveDistanceConstraintsIterations(data.ConstraintIterations);
+    }
+
+    private float ComputeCurrentSegmentLength()
+    {
+        var nodes = data.Nodes;
+        int count = nodes.Count;
+        if (count < 2)
+            return data.SegmentLength;
+
+        float totalLength = 0f;
+        for (int i = 0; i < count - 1; i++)
+        {
+            totalLength += Vector2.Distance(nodes[i].position, nodes[i + 1].position);
+        }
+
+        float maxStraightLength = data.SegmentLength * (count - 1);
+
+        // 0 = hoàn toàn chùng, 1 = căng thẳng hoàn toàn
+        float tension01 = Mathf.Clamp01(totalLength / maxStraightLength);
+
+        // Khi tension tăng → segment ngắn lại
+        float current = Mathf.Lerp(
+            data.SegmentLength,
+            data.SegmentLength / 3f,
+            tension01
+        );
+
+        return current;
+    }
+}
