@@ -2,8 +2,7 @@
 using UnityEngine;
 
 /// <summary>
-/// Stateless builder: từ profile + start/end -> trả về List<RopeNode4>.
-/// Không phụ thuộc vào GameObject hoặc MonoBehaviour.
+/// Minimal builder contract that returns a list of runtime RopeNode4.
 /// </summary>
 public interface IRopeBuilder
 {

@@ -1,9 +1,11 @@
 ﻿using UnityEngine;
+using System.Collections.Generic;
 
 [DisallowMultipleComponent]
-public class RopeRetractController : MonoBehaviour
+public sealed class RopeRetractController : MonoBehaviour
 {
-    [SerializeField] private VerletRope7 rope;
+    [SerializeField] private MonoBehaviour ropeSource; // MUST implement IRopeRetractRelease
+    private IRopeRetractRelease rope;
 
     [Header("Speed")]
     [SerializeField] private float retractSpeed = 5f;
@@ -15,40 +17,44 @@ public class RopeRetractController : MonoBehaviour
     private float retractProgress;
     private float releaseProgress;
 
-    private int retractIndex;
-    private int releaseIndex;
-
-    void Awake()
+    private void Awake()
     {
-        if (!rope)
-            rope = GetComponent<VerletRope7>();
+        if (ropeSource == null)
+            ropeSource = GetComponent<MonoBehaviour>();
+
+        rope = ropeSource as IRopeRetractRelease;
+
+        if (rope == null)
+        {
+            Debug.LogError(
+                $"[{name}] RopeRetractController requires a component implementing IRopeRetractRelease",
+                this
+            );
+            enabled = false;
+        }
     }
 
     public void StartRetract()
     {
+        if (!IsValid()) return;
         isReleasing = false;
         isRetracting = true;
     }
 
-    public void StopRetract()
-    {
-        isRetracting = false;
-    }
+    public void StopRetract() => isRetracting = false;
 
     public void StartRelease()
     {
+        if (!IsValid()) return;
         isRetracting = false;
         isReleasing = true;
     }
 
-    public void StopRelease()
-    {
-        isReleasing = false;
-    }
+    public void StopRelease() => isReleasing = false;
 
-    void FixedUpdate()
+    private void FixedUpdate()
     {
-        if (!rope || !rope.simulate) return;
+        if (!IsValid()) return;
 
         float dt = Time.fixedDeltaTime;
 
@@ -59,27 +65,34 @@ public class RopeRetractController : MonoBehaviour
             ApplyRelease(dt);
     }
 
-    void ApplyRetract(float delta)
+    private bool IsValid()
     {
-        int index = FindLastPinnedCloseToAnchor(0.01f);
-        retractIndex = ResolveRetractIndex(index);
+        return rope != null && rope.IsReady && rope.Nodes != null && rope.Nodes.Count >= 2;
+    }
 
-        if (retractIndex < 1)
+    private void ApplyRetract(float delta)
+    {
+        IList<RopeNode4> nodes = rope.Nodes;
+
+        int index = FindLastPinnedCloseToAnchor(nodes, 0.01f);
+        int retractIndex = index + 1;
+
+        if (retractIndex <= 0 || retractIndex >= nodes.Count)
         {
             isRetracting = false;
             return;
         }
 
-        var nodes = rope.nodes;
-
         RopeNode4 n = nodes[retractIndex];
         RopeNode4 prev = nodes[retractIndex - 1];
 
-        Vector2 nextPos = (retractIndex == rope.nodeCount - 1)
-            ? n.position + Vector2.down
-            : nodes[retractIndex + 1].position;
+        Vector2 nextPos =
+            (retractIndex == nodes.Count - 1)
+                ? n.position + Vector2.down
+                : nodes[retractIndex + 1].position;
 
-        retractProgress = Vector2.Distance(n.position, prev.position) - retractSpeed * delta;
+        retractProgress =
+            Vector2.Distance(n.position, prev.position) - retractSpeed * delta;
 
         n.isPinned = true;
         n.position = GeometryUtils.GetPointOnLine(
@@ -87,87 +100,81 @@ public class RopeRetractController : MonoBehaviour
             nextPos,
             Mathf.Max(0f, retractProgress)
         );
-
         n.oldPosition = n.position;
+
         nodes[retractIndex] = n;
     }
 
-    void ApplyRelease(float delta)
+    private void ApplyRelease(float delta)
     {
-        int index = FindLastPinnedCloseToAnchor(0.01f);
-        releaseIndex = ResolveReleaseIndex(index);
+        IList<RopeNode4> nodes = rope.Nodes;
 
-        if (releaseIndex <= 0)
+        int index = FindLastPinnedCloseToAnchor(nodes, 0.01f);
+        if (index <= 0 || index >= nodes.Count)
         {
             isReleasing = false;
             return;
         }
 
-        var nodes = rope.nodes;
+        int releaseIndex =
+            (index < nodes.Count - 1 && nodes[index + 1].isPinned)
+                ? index + 1
+                : index;
+
+        if (releaseIndex <= 0 || releaseIndex >= nodes.Count)
+        {
+            isReleasing = false;
+            return;
+        }
 
         RopeNode4 n = nodes[releaseIndex];
         RopeNode4 prev = nodes[releaseIndex - 1];
 
-        Vector2 nextPos = (releaseIndex == rope.nodeCount - 1)
-            ? n.position + Vector2.down
-            : nodes[releaseIndex + 1].position;
+        Vector2 nextPos =
+            (releaseIndex == nodes.Count - 1)
+                ? n.position + Vector2.down
+                : nodes[releaseIndex + 1].position;
 
         releaseProgress =
             Vector2.Distance(n.position, prev.position) + releaseSpeed * delta;
 
-        if (releaseProgress >= rope.segmentLength)
+        if (releaseProgress >= rope.SegmentLength)
         {
             n.position = GeometryUtils.GetPointOnLine(
-                prev.position, nextPos, rope.segmentLength
+                prev.position,
+                nextPos,
+                rope.SegmentLength
             );
             n.isPinned = false;
         }
         else
         {
             n.position = GeometryUtils.GetPointOnLine(
-                prev.position, nextPos, releaseProgress
+                prev.position,
+                nextPos,
+                releaseProgress
             );
         }
 
-        if (releaseIndex == rope.nodeCount - 1)
+        if (releaseIndex == nodes.Count - 1)
             n.isPinned = true;
 
         n.oldPosition = n.position;
         nodes[releaseIndex] = n;
     }
 
-    int FindLastPinnedCloseToAnchor(float threshold)
+    private int FindLastPinnedCloseToAnchor(IList<RopeNode4> nodes, float threshold)
     {
-        Vector2 anchorPos = rope.nodes[0].position;
+        Vector2 anchor = nodes[0].position;
 
-        for (int i = rope.nodes.Count - 2; i >= 0; i--)
+        for (int i = nodes.Count - 2; i >= 0; i--)
         {
-            if (!rope.nodes[i].isPinned)
+            if (!nodes[i].isPinned)
                 continue;
 
-            if (Vector2.Distance(rope.nodes[i].position, anchorPos) <= threshold)
+            if (Vector2.Distance(nodes[i].position, anchor) <= threshold)
                 return i;
         }
-
         return -1;
-    }
-
-    int ResolveReleaseIndex(int index)
-    {
-        if (index <= 0 || index >= rope.nodes.Count)
-            return -1;
-
-        if (index == rope.nodes.Count - 1)
-            return index;
-
-        return rope.nodes[index + 1].isPinned ? index + 1 : index;
-    }
-
-    int ResolveRetractIndex(int index)
-    {
-        if (index < 0 || index >= rope.nodes.Count - 1)
-            return -1;
-
-        return index + 1;
     }
 }

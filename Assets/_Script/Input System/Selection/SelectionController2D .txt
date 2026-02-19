@@ -1,0 +1,26 @@
+using UnityEngine;
+
+[DisallowMultipleComponent]
+public sealed class SelectionController2D : SelectionControllerBase
+{
+    [SerializeField] private LayerMask selectableMask;
+
+    protected override void TrySelect(Vector2 screenPosition)
+    {
+        Vector3 world = mainCamera.ScreenToWorldPoint(screenPosition);
+        Vector2 point = new Vector2(world.x, world.y);
+
+        RaycastHit2D hit = Physics2D.Raycast(
+            point,
+            Vector2.zero,
+            0f,
+            selectableMask
+        );
+
+        if (!hit)
+            return;
+
+        SetSelected(hit.collider.gameObject);
+    }
+}
+

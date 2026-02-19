@@ -180,15 +180,16 @@ public class RopeRender : MonoBehaviour
         line.positionCount = count;
 
         for (int i = 0; i < count; i++)
-            line.SetPosition(i, rope.Nodes[i]);
+            line.SetPosition(i, rope.NodesPositions[i]);
     }
 
     private bool HasValidRopeData()
     {
         return rope != null
-            && rope.Nodes != null
+            && rope.NodesPositions != null
             && rope.NodeCount > 1
-            && rope.Nodes.Count == rope.NodeCount;
+            && rope.NodesPositions.Count == rope.NodeCount;
+
     }
 
     #endregion

@@ -69,7 +69,7 @@ public class RopeBuilder
 
     public RopeBuilder AddRetractRelease()
     {
-        moduleInstallers.Add(go => go.AddComponent<RopeRetractReleaseController1>());
+        moduleInstallers.Add(go => go.AddComponent<RopeRetractController>());
         return this;
     }
 

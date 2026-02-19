@@ -5,4 +5,5 @@ public class RopeProfile : ScriptableObject
 {
     public RopePhysicsProfile physics;
     public RopeRenderProfile render;
+    public RopeBuilderAsset builder;
 }

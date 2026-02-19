@@ -1,0 +1,69 @@
+using UnityEngine;
+
+public sealed class SelectionController3D : MonoBehaviour
+{
+    [SerializeField] private Camera mainCamera;
+    [SerializeField] private LayerMask selectionLayer;
+    [SerializeField] private float maxDistance = 1000f;
+
+    private readonly RaycastHit[] hitBuffer = new RaycastHit[8];
+    private ISelectable current;
+
+    private void Awake()
+    {
+        if (!mainCamera)
+            mainCamera = Camera.main;
+    }
+
+    public void TrySelect(Vector2 screenPosition)
+    {
+        Ray ray = mainCamera.ScreenPointToRay(screenPosition);
+
+        int count = Physics.RaycastNonAlloc(
+            ray,
+            hitBuffer,
+            maxDistance,
+            selectionLayer,
+            QueryTriggerInteraction.Ignore
+        );
+
+        ISelectable best = null;
+        int bestPriority = int.MinValue;
+        float bestDistance = float.MaxValue;
+
+        for (int i = 0; i < count; i++)
+        {
+            var hit = hitBuffer[i];
+
+            if (!hit.collider.TryGetComponent(out ISelectable selectable))
+                continue;
+
+            int priority = selectable.SelectionPriority;
+
+            if (priority > bestPriority ||
+                (priority == bestPriority && hit.distance < bestDistance))
+            {
+                best = selectable;
+                bestPriority = priority;
+                bestDistance = hit.distance;
+            }
+        }
+
+        ApplySelection(best);
+    }
+
+    private void ApplySelection(ISelectable next)
+    {
+        if (current == next)
+            return;
+
+        current?.OnDeselected();
+        current = next;
+        current?.OnSelected();
+    }
+
+    public void ClearSelection()
+    {
+        ApplySelection(null);
+    }
+}

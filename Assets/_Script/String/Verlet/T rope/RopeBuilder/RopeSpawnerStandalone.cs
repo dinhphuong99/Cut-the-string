@@ -13,8 +13,11 @@ public class RopeSpawnerStandalone : MonoBehaviour
     [Header("Builder")]
     [SerializeField] private int nodeCount = 30;
 
+    [SerializeField] private RopeBuilderAsset ropeBuilder;
+
+
     [Header("Optional: Pendulum auto wiring")]
-    [SerializeField] private PendulumPhysicsProfile pendulumProfile; // assign if you want auto pendulum
+    [SerializeField] private PendulumBehaviorProfile pendulumBehavior;
     [SerializeField] private bool autoAddPendulumModuleIfMissing = true;
 
     private VerletRope7 currentRope;
@@ -22,6 +25,12 @@ public class RopeSpawnerStandalone : MonoBehaviour
     [ContextMenu("Create Rope")]
     public void CreateRope()
     {
+        if (ropeBuilder == null)
+        {
+            Debug.LogError("[RopeSpawnerStandalone] Missing RopeBuilderAsset");
+            return;
+        }
+
         if (currentRope != null)
         {
             Debug.LogWarning("[RopeSpawnerStandalone] Rope already exists");
@@ -34,69 +43,42 @@ public class RopeSpawnerStandalone : MonoBehaviour
             return;
         }
 
-        IRopeBuilder builder = new CompressStretchRopeBuilder(nodeCount);
+        IRopeBuilder builder = ropeBuilder.CreateBuilder(nodeCount);
 
-        List<RopeNode4> nodes = builder.Build(
-            ropeProfile,
-            startAnchor.position,
-            endAnchor.position,
-            pinStart: true,
-            pinEnd: true
-        );
-
+        var nodes = builder.Build(ropeProfile, startAnchor.position, endAnchor.position, true, true);
         if (nodes == null || nodes.Count < 2)
         {
             Debug.LogError("[RopeSpawnerStandalone] Builder returned invalid nodes");
             return;
         }
 
-        GameObject blueprint = CreateLogicBlueprint();
+        var blueprint = CreateLogicBlueprint();
 
-        // configure callback: will run after modules copied but BEFORE rope.InitializeRuntime (so adapter + module see config at init)
         System.Action<GameObject> configure = (runtimeGo) =>
         {
-            // ensure there is a RopePendulumAdapter
+            // ---- RopeControlAdapter ----
+            if (runtimeGo.GetComponent<RopeControlAdapter>() == null)
+            {
+                runtimeGo.AddComponent<RopeControlAdapter>();
+            }
+
+            // wire pendulum adapter if present
             var adapter = runtimeGo.GetComponent<RopePendulumAdapter>();
             if (adapter == null)
-            {
                 adapter = runtimeGo.AddComponent<RopePendulumAdapter>();
-            }
 
-            // wire adapter references
-            adapter.bob = endAnchor != null ? endAnchor.GetComponent<Rigidbody2D>() : null;
             adapter.anchor = startAnchor;
-            adapter.pendulumProfile = pendulumProfile;
+            adapter.bob = endAnchor != null ? endAnchor.GetComponent<Rigidbody2D>() : null;
+            adapter.pendulumBehavior = pendulumBehavior;
 
-            // ensure PendulumModule exists (copied from blueprint or added now)
-            var pendModule = runtimeGo.GetComponent<PendulumModule>();
-            if (pendModule == null && autoAddPendulumModuleIfMissing)
-            {
+            if (runtimeGo.GetComponent<PendulumModule>() == null && autoAddPendulumModuleIfMissing)
                 runtimeGo.AddComponent<PendulumModule>();
-            }
         };
 
-        currentRope = RopeFactory.CreateRope(
-            ropeProfile,
-            nodes,
-            startAnchor,
-            endAnchor,
-            blueprint,
-            configure
-        );
+        currentRope = RopeFactory.CreateRope(ropeProfile, nodes, startAnchor, endAnchor, blueprint, configure);
 
-        // destroy blueprint (no scene refs kept)
-        if (Application.isPlaying)
-            Destroy(blueprint);
-        else
-            DestroyImmediate(blueprint);
-    }
-
-    [ContextMenu("Destroy Rope")]
-    public void DestroyRope()
-    {
-        if (currentRope == null) return;
-        Destroy(currentRope.gameObject);
-        currentRope = null;
+        if (Application.isPlaying) Destroy(blueprint);
+        else DestroyImmediate(blueprint);
     }
 
     private GameObject CreateLogicBlueprint()
@@ -104,11 +86,10 @@ public class RopeSpawnerStandalone : MonoBehaviour
         GameObject go = new GameObject("Rope_LogicBlueprint");
         go.hideFlags = HideFlags.HideAndDontSave;
 
-        // Add module types only. Keep blueprint free of scene object references.
-        go.AddComponent<RopeSimulation>(); // keep your existing module names (or rename accordingly)
+        go.AddComponent<RopeSimulation>();
         go.AddComponent<RopeCutter>();
-        go.AddComponent<RopeRetractReleaseController1>();
-        go.AddComponent<PendulumModule>(); // copied so runtime rope has same module type
+        go.AddComponent<RopeRetractReleaseController>();
+        go.AddComponent<PendulumModule>();
 
         return go;
     }

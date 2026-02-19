@@ -2,24 +2,26 @@
 
 public class RopeCutter : MonoBehaviour, IRopeModule
 {
-    [SerializeField] private MonoBehaviour ropeSource;
+    [SerializeField] private MonoBehaviour ropeSource; // optional manual override
     [SerializeField] private float stretchThreshold = 0.94f;
-    private IRopeDataProvider data;
-    private bool initialized = false;
 
-    private ICuttableRope rope;
-    private bool hasCut;
+    private ICuttableRope cuttable;
+    private bool initialized = false;
+    private bool hasCut = false;
 
     public void Initialize(IRopeDataProvider rp)
     {
         if (initialized) return;
 
-        data = rp;
+        // try override source first
+        if (ropeSource != null && ropeSource is ICuttableRope r)
+            cuttable = r;
+        else if (rp is ICuttableRope rc)
+            cuttable = rc;
 
-        rope = rp as ICuttableRope;
-        if (rope == null)
+        if (cuttable == null)
         {
-            Debug.LogWarning("[RopeCutter] ICuttableRope not supported", this);
+            Debug.LogWarning("[RopeCutter] ICuttableRope not available. Disabling.", this);
             enabled = false;
             return;
         }
@@ -27,65 +29,24 @@ public class RopeCutter : MonoBehaviour, IRopeModule
         initialized = true;
     }
 
-    public void CopyConfigFrom(RopeCutter other)
-    {
-        stretchThreshold = other.stretchThreshold;
-        // KHÔNG đụng vào ropeSource ở runtime
-    }
-
     private void FixedUpdate()
     {
-        if (!initialized)
-            return;
-
-        if (!data.IsReady)
-            return;
-
-        TryAutoCutRope();
-    }
-
-    private ICuttableRope ResolveRope()
-    {
-        if (ropeSource != null)
+        if (!initialized || !cuttable.CanBeCut || hasCut) return;
+        float stretch = cuttable.GetStretch;
+        if (stretch >= stretchThreshold)
         {
-            var r = ropeSource as ICuttableRope;
-            if (r != null)
-                return r;
-
-            Debug.LogError(
-                "[RopeCutter] ropeSource does not implement ICuttableRope",
-                this
-            );
-            return null;
+            int idx = cuttable.RecommendedCutIndex;
+            if (idx >= 0)
+            {
+                hasCut = cuttable.CutAt(idx);
+            }
         }
-
-        return GetComponent<ICuttableRope>();
     }
 
-    private void TryAutoCutRope()
+    public bool CutManually(int index)
     {
-        if (!initialized) return;
-
-        if (hasCut || !rope.CanBeCut)
-            return;
-
-        if (rope.GetStretch < stretchThreshold)
-            return;
-
-        int cutIndex = rope.RecommendedCutIndex;
-        if (cutIndex < 0)
-            return;
-
-        hasCut = true;
-        rope.CutAt(cutIndex);
-    }
-
-    public bool CutManually(int cutIndex)
-    {
-        if (hasCut || !rope.CanBeCut)
-            return false;
-
-        hasCut = rope.CutAt(cutIndex);
+        if (!initialized || hasCut || !cuttable.CanBeCut) return false;
+        hasCut = cuttable.CutAt(index);
         return hasCut;
     }
 }

@@ -1,6 +1,10 @@
 ﻿using System.Collections.Generic;
 using UnityEngine;
 
+/// <summary>
+/// Default implementation of IRopeBuilder used by RopeBuilder.
+/// Produces evenly spaced nodes between start and end and respects the profile.segmentLength.
+/// </summary>
 public sealed class CompressStretchRopeBuilder : IRopeBuilder
 {
     private readonly int fixedNodeCount;
@@ -18,26 +22,24 @@ public sealed class CompressStretchRopeBuilder : IRopeBuilder
             return null;
         }
 
-        float segmentLength = profile.physics.segmentLength;
+        float segLen = profile.physics.segmentLength;
         var nodes = new List<RopeNode4>(fixedNodeCount);
 
-        float idealTotalLength = segmentLength * (fixedNodeCount - 1);
+        float idealTotal = segLen * (fixedNodeCount - 1);
         float actualDist = Vector3.Distance(start, end);
-        float scale = (idealTotalLength <= Mathf.Epsilon) ? 1f : (actualDist / idealTotalLength);
-
+        float scale = (idealTotal <= Mathf.Epsilon) ? 1f : (actualDist / idealTotal);
         Vector3 dir = (actualDist > Mathf.Epsilon) ? (end - start).normalized : Vector3.right;
 
         for (int i = 0; i < fixedNodeCount; i++)
         {
-            float idealOffset = segmentLength * i;
+            float idealOffset = segLen * i;
             Vector3 pos = start + dir * (idealOffset * scale);
-
             var node = new RopeNode4(pos, false);
             node.oldPosition = pos;
             nodes.Add(node);
         }
 
-        if (pinStart)
+        if (pinStart && nodes.Count > 0)
         {
             var n0 = nodes[0];
             n0.isPinned = true;
@@ -46,7 +48,7 @@ public sealed class CompressStretchRopeBuilder : IRopeBuilder
             nodes[0] = n0;
         }
 
-        if (pinEnd)
+        if (pinEnd && nodes.Count > 1)
         {
             var nl = nodes[nodes.Count - 1];
             nl.isPinned = true;
